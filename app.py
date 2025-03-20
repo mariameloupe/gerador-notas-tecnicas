@@ -156,7 +156,10 @@ if uploaded_files:
     municipios_disponiveis_fem = df_fem[coluna_municipio_fem].dropna().unique()
     municipios_disponiveis_emendas = df_emendas[coluna_municipio_emendas].dropna().unique()
     
-    municipio_selecionado = st.selectbox("🌍 Selecione um Município", list(set(municipios_disponiveis_fem).union(set(municipios_disponiveis_emendas))))
+    # Ordena os municípios em ordem alfabética
+    municipios_ordenados = sorted(list(set(municipios_disponiveis_fem).union(set(municipios_disponiveis_emendas))))
+    
+    municipio_selecionado = st.selectbox("🌍 Selecione um Município", municipios_ordenados)
     
     df_fem_filtrado = df_fem[df_fem[coluna_municipio_fem] == municipio_selecionado]
     df_emendas_filtrado = df_emendas[df_emendas[coluna_municipio_emendas] == municipio_selecionado]
@@ -242,7 +245,8 @@ if uploaded_files:
         if not df_emendas_filtrado.empty:
             adicionar_paragrafo_formatado(doc, "Emendas Parlamentares", fonte='Arial', tamanho=12, negrito=True, cor=None)
             
-            colunas_tabela_emendas = ["PROJETO DETALHADO", "STATUS OBRA", "VALOR UTILIZADO DA EMENDA", "REPASSE_VÁLIDO", "DATA ÚLTIMO PAGAMENTO"]
+            # Define as colunas na ordem solicitada e com os novos nomes
+            colunas_tabela_emendas = ["PTM", "VALOR UTILIZADO DA EMENDA", "VALOR REPASSADO", "STATUS", "DATA ÚLTIMO PAGAMENTO"]
             
             tabela_emendas = doc.add_table(rows=1, cols=len(colunas_tabela_emendas))
             tabela_emendas.style = 'Table Grid'
@@ -256,11 +260,32 @@ if uploaded_files:
             for _, linha in df_emendas_filtrado.iterrows():
                 row_cells = tabela_emendas.add_row().cells
                 for i, coluna in enumerate(colunas_tabela_emendas):
-                    if coluna == "VALOR UTILIZADO DA EMENDA" or coluna == "REPASSE_VÁLIDO":
-                        valor = formatar_moeda(linha.get(coluna, '0'))
-                    else:
-                        valor = str(linha.get(coluna, '0'))
+                    if coluna == "PTM":
+                        valor = str(linha.get("PROJETO DETALHADO", '0'))
+                    elif coluna == "VALOR UTILIZADO DA EMENDA":
+                        valor = formatar_moeda(linha.get("VALOR UTILIZADO DA EMENDA", '0'))
+                    elif coluna == "VALOR REPASSADO":
+                        valor = formatar_moeda(linha.get("REPASSE_VÁLIDO", '0'))
+                    elif coluna == "STATUS":
+                        valor = str(linha.get("STATUS OBRA", '0'))
+                    elif coluna == "DATA ÚLTIMO PAGAMENTO":
+                        valor = str(linha.get("DATA ÚLTIMO PAGAMENTO", '0'))
+                        try:
+                            valor = datetime.strptime(valor, '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y')
+                        except ValueError:
+                            pass
                     row_cells[i].text = valor
+            
+            # Adiciona a linha de total
+            total_row = tabela_emendas.add_row().cells
+            formatar_celula_negrito(total_row[0], "VALOR TOTAL")  # Formata "VALOR TOTAL" em negrito
+            
+            # Calcula e formata os totais para VALOR UTILIZADO DA EMENDA e VALOR REPASSADO
+            total_valor_utilizado = df_emendas_filtrado["VALOR UTILIZADO DA EMENDA"].replace('', '0').astype(float).sum()
+            formatar_celula_negrito(total_row[1], formatar_moeda(total_valor_utilizado))  # Formata o valor em negrito
+            
+            total_valor_repassado = df_emendas_filtrado["REPASSE_VÁLIDO"].replace('', '0').astype(float).sum()
+            formatar_celula_negrito(total_row[2], formatar_moeda(total_valor_repassado))  # Formata o valor em negrito
             
             # Aplica a formatação da tabela (fonte Arial tamanho 8)
             formatar_tabela(tabela_emendas)
