@@ -3,7 +3,9 @@ import pandas as pd
 import os
 from docx import Document
 from datetime import datetime
-from docx.shared import Inches, Pt
+from docx.shared import Inches, Pt, RGBColor
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 # Caminho fixo da logo
 LOGO_PATH = "logo.png"  # Certifique-se de que a logo está salva neste caminho
@@ -26,6 +28,45 @@ def carregar_dados(uploaded_file):
         df = pd.merge(df_inf_gerais, df_resumo, on="ORDEM", how="left")
         return df
     return None
+
+# Função para adicionar parágrafos formatados
+def adicionar_paragrafo_formatado(doc, texto, fonte='Arial', tamanho=12, negrito=False, cor=None):
+    paragraph = doc.add_paragraph()
+    run = paragraph.add_run(texto)
+    run.font.name = fonte
+    run.font.size = Pt(tamanho)
+    run.bold = negrito
+    if cor:
+        run.font.color.rgb = cor
+    return paragraph
+
+# Função para formatar valores como moeda
+def formatar_moeda(valor):
+    try:
+        return f"R$ {float(valor):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+    except ValueError:
+        return 'R$ 0,00'
+
+# Função para aplicar fonte Arial tamanho 8 em todas as células da tabela
+def formatar_tabela(tabela):
+    for row in tabela.rows:
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                for run in paragraph.runs:
+                    run.font.name = 'Arial'
+                    run.font.size = Pt(8)
+
+# Função para definir a cor de fundo de uma célula
+def definir_cor_fundo_celula(celula, cor_hex):
+    """
+    Define a cor de fundo de uma célula da tabela.
+    cor_hex: Cor em formato hexadecimal (ex: #75B4FF).
+    """
+    cor_rgb = tuple(int(cor_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+    tcPr = celula._tc.get_or_add_tcPr()
+    shd = OxmlElement('w:shd')
+    shd.set(qn('w:fill'), cor_hex.lstrip('#'))
+    tcPr.append(shd)
 
 # Layout no Streamlit
 st.set_page_config(page_title="Gerador de Notas Técnicas", layout="wide")
@@ -89,82 +130,58 @@ if uploaded_files:
         doc.add_paragraph(f"Atualizado em: {data_atualizacao}")
         
         for ano in sorted(anos_disponiveis):
+            adicionar_paragrafo_formatado(doc, f"Ano do Registro: {ano}", fonte='Arial', tamanho=12, negrito=False, cor=None)
             df_ano = df_filtrado[df_filtrado['ANO'] == ano]
-            doc.add_paragraph(f"Ano do Registro: {ano}", style='Heading 3')
             
-            colunas_tabela = ["PROJETO DETALHADO", 'TETO FEM_x' if 'TETO FEM_x' in df_ano.columns else 'TETO FEM_y', "REPASSE_VÁLIDO", "DATA ÚLTIMO PAGAMENTO", 'STATUS OBRA_x' if 'STATUS OBRA_x' in df_ano.columns else 'STATUS OBRA_y']
+            # Define os novos cabeçalhos
+            colunas_tabela = ["PTM", 'VALOR TOTAL FEM', "VALOR REPASSADO", "DATA ÚLTIMO PAGAMENTO", 'STATUS']
             
             tabela = doc.add_table(rows=1, cols=len(colunas_tabela))
             tabela.style = 'Table Grid'
             
+            # Aplica a cor de fundo no cabeçalho
             hdr_cells = tabela.rows[0].cells
             for i, coluna in enumerate(colunas_tabela):
                 hdr_cells[i].text = coluna
+                definir_cor_fundo_celula(hdr_cells[i], '#75B4FF')  # Cor de fundo #75B4FF
             
+            # Adiciona as linhas da tabela
             for _, linha in df_ano.iterrows():
                 row_cells = tabela.add_row().cells
                 for i, coluna in enumerate(colunas_tabela):
-                    valor = linha.get(coluna, '0')
-                    if coluna in ['TETO FEM_x', 'TETO FEM_y', 'REPASSE_VÁLIDO']:
-                        try:
-                            valor = f"R$ {float(valor):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-                        except ValueError:
-                            valor = 'R$ 0,00'
-                    if coluna == 'DATA ÚLTIMO PAGAMENTO':
-                        valor = str(valor)
+                    if coluna == "PTM":
+                        valor = linha.get("PROJETO DETALHADO", '0')
+                    elif coluna == "VALOR TOTAL FEM":
+                        valor = linha.get('TETO FEM_x' if 'TETO FEM_x' in df_ano.columns else 'TETO FEM_y', '0')
+                        valor = formatar_moeda(valor)
+                    elif coluna == "VALOR REPASSADO":
+                        valor = linha.get("REPASSE_VÁLIDO", '0')
+                        valor = formatar_moeda(valor)
+                    elif coluna == "DATA ÚLTIMO PAGAMENTO":
+                        valor = str(linha.get("DATA ÚLTIMO PAGAMENTO", '0'))
                         try:
                             valor = datetime.strptime(valor, '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y')
                         except ValueError:
                             pass
+                    elif coluna == "STATUS":
+                        valor = linha.get('STATUS OBRA_x' if 'STATUS OBRA_x' in df_ano.columns else 'STATUS OBRA_y', '0')
                     row_cells[i].text = str(valor)
-        caminho_nota = "nota_tecnica.docx"
-        doc = Document()
-        doc.styles['Normal'].font.name = 'Arial'
-        doc.styles['Normal'].font.size = Pt(12)
-        
-        if os.path.exists(LOGO_PATH):
-            paragraph = doc.add_paragraph()
-            run = paragraph.add_run()
-            run.add_picture(LOGO_PATH, width=Inches(1.5))
-            paragraph.alignment = 4  # Alinha à direita
-        
-        title = doc.add_paragraph()
-        title_run = title.add_run('NOTA TÉCNICA')
-        title_run.bold = True
-        title.alignment = 1  # Centraliza o texto
-        municipio_paragraph = doc.add_paragraph()
-        municipio_run = municipio_paragraph.add_run(f"Município de {municipio_selecionado}")
-        
-        ano = df_filtrado.iloc[0]['ORDEM'][:4] if not df_filtrado.empty else "Desconhecido"
-        doc.add_paragraph(f"Ano do Registro: {ano}", style='Heading 3')
-        municipio_run.bold = True
-        municipio_run.font.color.rgb = None
-        doc.add_paragraph(f"Atualizado em: {data_atualizacao}")
-        colunas_tabela = ["PROJETO DETALHADO", 'TETO FEM_x' if 'TETO FEM_x' in df_filtrado.columns else 'TETO FEM_y', "REPASSE_VÁLIDO", "DATA ÚLTIMO PAGAMENTO", 'STATUS OBRA_x' if 'STATUS OBRA_x' in df_filtrado.columns else 'STATUS OBRA_y']
-        
-        tabela = doc.add_table(rows=1, cols=len(colunas_tabela))
-        tabela.style = 'Table Grid'
-        
-        hdr_cells = tabela.rows[0].cells
-        for i, coluna in enumerate(colunas_tabela):
-            hdr_cells[i].text = coluna
-        
-        for _, linha in df_filtrado.iterrows():
-            row_cells = tabela.add_row().cells
-            for i, coluna in enumerate(colunas_tabela):
-                valor = linha.get(coluna, '0')
-                if coluna in ['TETO FEM_x', 'TETO FEM_y', 'REPASSE_VÁLIDO']:
-                    try:
-                        valor = f"R$ {float(valor):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-                    except ValueError:
-                        valor = 'R$ 0,00'
-                if coluna == 'DATA ÚLTIMO PAGAMENTO':
-                    valor = str(valor)  # Garante que o valor seja tratado como string antes da conversão
-                    try:
-                        valor = datetime.strptime(valor, '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y')
-                    except ValueError:
-                        pass
-                row_cells[i].text = str(valor)
+            
+            # Adiciona a linha de total
+            total_row = tabela.add_row().cells
+            total_row[0].text = "VALOR TOTAL"
+            total_row[0].paragraphs[0].runs[0].bold = True  # Formatação em negrito
+            
+            # Calcula e formata os totais para VALOR TOTAL FEM e VALOR REPASSADO
+            coluna_teto_fem = 'TETO FEM_x' if 'TETO FEM_x' in df_ano.columns else 'TETO FEM_y'
+            total_teto_fem = df_ano[coluna_teto_fem].replace('', '0').astype(float).sum()
+            total_row[1].text = formatar_moeda(total_teto_fem)
+            
+            total_repasse_valido = df_ano['REPASSE_VÁLIDO'].replace('', '0').astype(float).sum()
+            total_row[2].text = formatar_moeda(total_repasse_valido)
+            
+            # Aplica a formatação da tabela (fonte Arial tamanho 8)
+            formatar_tabela(tabela)
         
         doc.save(caminho_nota)
         st.success("✅ Nota Técnica gerada com sucesso!")
